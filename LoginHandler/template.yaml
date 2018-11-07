@@ -10,3 +10,11 @@ Resources:
       Description: ''
       MemorySize: 128
       Timeout: 15
+  ProfilePicHandler:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Handler: ProfilePicHandler/index.handler
+      Runtime: nodejs6.10
+      Description: ''
+      MemorySize: 128
+      Timeout: 15
