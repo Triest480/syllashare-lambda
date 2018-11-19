@@ -162,6 +162,14 @@ def getMessages(connection, cursor, chatID, userID):
     return { "errMsg": "User not in group" }
     
     
+def searchGroups(connection, cursor, query, userID):
+    resp = []
+    if cursor.execute("""SELECT g.name, g.private FROM Groups g
+        WHERE LCASE(g.name) LIKE %s ORDER BY LENGTH(g.name), g.name LIMIT 50""", (query + '%')) > 0:
+            for (name, private) in cursor:
+                resp.append({"name": name, "private": private})
+    return resp
+    
 def handler(event, context):
     dbHost = os.environ['db_host']
     dbUser = os.environ['db_user']
@@ -196,4 +204,6 @@ def handler(event, context):
         return getGroup(connection, cursor, args["groupName"], userID)
     elif (event["type"] == "GetMessages"):
         return getMessages(connection, cursor, args["chatID"], userID)
+    elif (event["type"] == "SearchGroups"):
+        return searchGroups(connection, cursor, args["query"], userID)
     return { "errMsg": "Event not found" }
