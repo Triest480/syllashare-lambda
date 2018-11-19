@@ -149,7 +149,7 @@ exports.handler = (event, context, callback) => {
                 "Access-Control-Allow-Origin" : "*",
                 "Access-Control-Allow-Credentials" : true
             }, 
-            body: JSON.stringify({ "token": token, "expEpochMillis": expEpochMillis })
+            body: JSON.stringify({ "userID": userID, "token": token, "expEpochMillis": expEpochMillis })
         });
     })
     .catch((err) => {
