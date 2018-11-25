@@ -65,12 +65,10 @@ def joinGroup(connection, cursor, groupName, userID):
 
 
 def leaveGroup(connection, cursor, groupName, userID):
-    print("Leave group called: ", groupName, " - ", userID)
     group = getGroup(connection, cursor, groupName, userID)["group"]
     if cursor.execute('DELETE FROM GroupsToUsers WHERE groupName=%s AND userID=%s', (groupName, userID)) > 0:
         connection.commit()
         return { "group": group, "user": getUser(cursor, userID), "userID": userID, "groupName": groupName }
-    print("User not in or not invited to group")
     return { "errMsg": "Not in or have not been invited to group" }
     
 def kickFromGroup(connection, cursor, groupName, kickUserID, userID):
@@ -79,7 +77,6 @@ def kickFromGroup(connection, cursor, groupName, kickUserID, userID):
         if cursor.execute('DELETE FROM GroupsToUsers WHERE groupName=%s AND userID=%s', (groupName, kickUserID)) > 0:
             connection.commit()
             return { "group": group, "user": getUser(cursor, kickUserID), "userID": kickUserID, "groupName": groupName }
-        print("User not in or not invited to group")
         return { "errMsg": "Not in or have not been invited to group" }
     return {"errMsg": "Cannot kick from group you are not in" }
     
@@ -115,7 +112,6 @@ def createChat(connection, cursor, groupName, chatName, chatSubject, userID):
     
 def createMessage(connection, cursor, chatID, text, objKey, creationEpochSecs, userID):
     #Check if user is part of group that the chat belongs to
-    print("Creating msg")
     if cursor.execute("""SELECT c.groupName FROM Chats c WHERE c.id=%s""", (chatID)) > 0:
         groupName = cursor.fetchone()[0]
         if canRead(cursor, groupName, userID):
@@ -141,7 +137,6 @@ def getGroups(connection, cursor, userID):
         group["group"]["chats"] = groupContents["group"]["chats"]
         group["accepted"] = groupContents["accepted"]
         group["writable"] = groupContents["writable"]
-    print("GROUPS: ", groups)
     return groups
             
 
@@ -165,9 +160,7 @@ def getGroup(connection, cursor, groupName, userID):
             cursor.execute("""SELECT gu.userID, gu.accepted, gu.writable FROM GroupsToUsers gu WHERE gu.groupName=%s""", (groupName))
             userQueryRes = cursor.fetchall()
             for (userID, accepted, writable) in userQueryRes:
-                print("USERID: ", userID)
                 user = getUser(cursor, userID)
-                print("USER: ", user)
                 user["accepted"] = accepted
                 user["writable"] = writable
                 group["users"].append(user)
@@ -187,17 +180,12 @@ def getMessages(connection, cursor, chatID, userID):
             senderIDs = {}
             messages = []
             cursor.execute("""SELECT id, text, objKey, creationEpochSecs, senderID FROM Messages WHERE chatID=%s ORDER BY creationEpochSecs DESC""", (chatID))
-            print("Message loop")
             for (id, text, objKey, creationEpochSecs, senderID) in cursor:
-                print("Message: ", id)
                 senderIDs[senderID] = True
                 messages.append({ "id": id, "text": text, "objKey": objKey, "creationEpochSecs": creationEpochSecs, "chatID": chatID, "senderID": senderID })
-            print("Senders loop")
             senders = []
             for senderID in senderIDs:
-                print("Sender: ", senderID)
                 senders.append(getUser(cursor, senderID))
-            print("MS: ", messages, " SS", senders)
             return { "messages": messages, "senders": senders }
         return { "errMsg": "user does not have access" }
     return { "errMsg": "User not in group" }
@@ -251,16 +239,17 @@ def deleteEvents(connection, cursor, groupName, eventIDs):
     return { "errMsg": "Failed to delete ids" }
     
 def searchTeachers(connection, cursor, query, userID):
+    teachers = []
     if cursor.execute("SELECT school_id FROM user_data_user WHERE id=%s", (userID)) > 0:
         schoolName = cursor.fetchone()[0]
         if schoolName is not None:
             cursor.execute("""SELECT t.name, s.name, s.city, s.state, s.pic_key FROM Teachers t
-                INNER JOIN Teachers t ON t.schoolName=s.name 
+                INNER JOIN user_data_school s ON t.schoolName=s.name 
                 WHERE t.schoolName=%s AND LCASE(t.name) LIKE %s 
                 ORDER BY LENGTH(t.name), t.name LIMIT 50""", (schoolName, query + '%'))
         else:
             cursor.execute("""SELECT t.name, s.name, s.city, s.state, s.pic_key FROM Teachers t
-                LEFT JOIN Schools s ON t.schoolName=s.name 
+                LEFT JOIN user_data_school s ON t.schoolName=s.name 
                 WHERE LCASE(t.name) LIKE %s 
                 ORDER BY LENGTH(t.name), t.name LIMIT 50""", (query + '%'))
         for (teacherName, schoolName, schoolCity, schoolState, schoolPicKey) in cursor:
@@ -272,38 +261,41 @@ def searchTeachers(connection, cursor, query, userID):
                     "state": schoolState,
                     "picKey": schoolPicKey
                 }
-            return {
+            teachers.append({
                 "name": teacherName,
                 "school": school
-            }
+            })
+    return teachers
     
 def searchCourses(connection, cursor, query, userID):
     if cursor.execute("SELECT school_id FROM user_data_user WHERE id=%s", (userID)) > 0:
         schoolName = cursor.fetchone()[0]
-        if schoolName is None:
-            cursor.execute("""SELECT co.id, co.name, s.name, s.city, s.state, s.pic_key FROM Courses co 
-                LEFT JOIN Schools s ON co.schoolName=s.name 
-                WHERE LCASE(co.id) LIKE %s OR LCASE(co.name) LIKE %s 
-                ORDER BY LENGTH(co.id), co.id LIMIT 50""", (query + '%', query + '%'))
-        else:
-            cursor.execute("""SELECT co.id, co.name, s.name, s.city, s.state, s.pic_key FROM Courses co 
-                INNER JOIN Schools s ON co.schoolName=s.name 
-                WHERE s.name=%s (LCASE(co.id) LIKE %s OR LCASE(co.name) LIKE %s) 
-                ORDER BY LENGTH(co.id), co.id LIMIT 50""", (schoolName, query + '%', query + '%'))
-        for (courseID, courseName, schoolName, schoolCity, schoolState, schoolPicKey) in cursor:
-            school = None
-            if schoolName is not None:
-                school = {
-                    "name": schoolName,
-                    "city": schoolCity,
-                    "state": schoolState,
-                    "picKey": schoolPicKey
-                }
-            return {
-                "id": courseID,
-                "name": courseName,
-                "school": school
+    if schoolName is None:
+        cursor.execute("""SELECT co.id, co.name, s.name, s.city, s.state, s.pic_key FROM Courses co 
+            LEFT JOIN user_data_school s ON co.schoolName=s.name 
+            WHERE LCASE(co.id) LIKE %s OR LCASE(co.name) LIKE %s 
+            ORDER BY LENGTH(co.id), co.id LIMIT 50""", (query + '%', query + '%'))
+    else:
+        cursor.execute("""SELECT co.id, co.name, s.name, s.city, s.state, s.pic_key FROM Courses co 
+            INNER JOIN user_data_school s ON co.schoolName=s.name 
+            WHERE s.name=%s AND (LCASE(co.id) LIKE %s OR LCASE(co.name) LIKE %s) 
+            ORDER BY LENGTH(co.id), co.id LIMIT 50""", (schoolName, query + '%', query + '%'))
+    courses = []
+    for (courseID, courseName, schoolName, schoolCity, schoolState, schoolPicKey) in cursor:
+        school = None
+        if schoolName is not None:
+            school = {
+                "name": schoolName,
+                "city": schoolCity,
+                "state": schoolState,
+                "picKey": schoolPicKey
             }
+        courses.append({
+            "id": courseID,
+            "name": courseName,
+            "school": school
+        })
+    return courses
     
     
 def getClass(connection, cursor, classID):
@@ -402,7 +394,7 @@ def handler(event, context):
     elif (event["type"] == "DeleteEvents"):
         return deleteEvents(connection, cursor, args["groupName"], args["eventIDs"])
     elif (event["type"] == "SearchCourses"):
-        return searchCourses(connection, cursor, args["query"])
+        return searchCourses(connection, cursor, args["query"], userID)
     elif (event["type"] == "GetClasses"):
         return getClassesForCourse(connection, cursor, args["courseID"])
     elif (event["type"] == "GetClass"):
