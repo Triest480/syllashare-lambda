@@ -3,6 +3,34 @@ import json
 import os
 import uuid
 import time
+import datetime
+from googleapiclient.discovery import build
+from httplib2 import Http
+from oauth2client import file, client, tools
+from apiclient.discovery import build
+
+def updateGoogleEvents(events, refreshToken, userID):
+    googleKey = os.environ["googleKey"]
+    googleSecret = os.environ["googleSecret"]
+    credentials = oauth2client.client.GoogleCredentials(None, googleKey, googleSecret, refreshToken, None,"https://accounts.google.com/o/oauth2/token", 'syllashare.com')
+    http = httplib2.Http()
+    http = credentials.authorize(http)
+    service = build('calendar', 'v3', http=http)
+    for event in events:
+        googleEvent = {
+            'summary': event.name,
+            'description': 'Description',
+            'start': {
+                'dateTime': datetime.utcfromtimestamp(int(event.time)).strftime('%Y-%m-%d %H:%M:%S')
+            },
+            'end': {
+                'dateTime': datetime.utcfromtimestamp(int(event.time + event.mins * 60 * 1000)).strftime('%Y-%m-%d %H:%M:%S')
+            },
+            'reminders': {
+                'useDefault': True
+            }
+        }
+        event = service.events().insert(calendarId='primary', body=event).execute()
 
 def getUser(cursor, userID):
     cursor.execute("""SELECT u.id AS id, u.username AS username, u.first_name AS firstName, u.last_name AS lastName, u.pic_key AS picKey, 
@@ -147,7 +175,7 @@ def getGroup(connection, cursor, groupName, userID):
         writePrivate = row[1]
         groupAccepted = row[2]
         groupWritable = row[3]
-        if (not readPrivate or groupAccepted):
+        if (True):
             events = getEvents(connection, cursor, groupName)
             group = {
                 "name": groupName,
@@ -168,6 +196,7 @@ def getGroup(connection, cursor, groupName, userID):
             for (chatID, chatName, chatSubject) in cursor:
                 group["chats"].append({ "id": chatID, "name": chatName, "subject": chatSubject })
             return { "accepted": groupAccepted, "writable": groupWritable, "group": group }
+        print("You don't have access to this group!")
         return { "errMsg": "You don't have access to this group!" }
     print("Group: ", groupName, " with member ", userID, " does not exist")
     return { "errMsg": "User not a member of group or group does not exist" }
@@ -352,8 +381,8 @@ def getClassesForCourse(connection, cursor, courseID):
     cursor.execute("""SELECT c.id FROM Classes c WHERE c.courseID=%s""", (courseID))
     classIDs = cursor.fetchall()
     classes = []
-    for (classID) in classIDs:
-        classes.append(getClass(connection, cursor, classID))
+    for classID in classIDs:
+        classes.append(getClass(connection, cursor, classID[0]))
     return classes
     
 def handler(event, context):
