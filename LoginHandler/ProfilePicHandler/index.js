@@ -42,7 +42,7 @@ exports.handler = function(event, context, callback) {
 	                })
 	                .promise()
 	                .then(() => {
-	                    connection.query('UPDATE user_data_user SET pic_key=?', [newKey], (function (err) {
+	                    connection.query('UPDATE user_data_user SET pic_key=? WHERE id=?', [newKey, userID], (function (err) {
 	                        if (err) {
 	                            console.error("Error inserting into database");
 	                            callback(null, { statusCode: 500, headers: {

@@ -169,13 +169,14 @@ def getGroups(connection, cursor, userID):
             
 
 def getGroup(connection, cursor, groupName, userID):
-    if cursor.execute("""SELECT g.readPrivate, g.writePrivate, gu.accepted, gu.writable FROM Groups g LEFT JOIN GroupsToUsers gu ON gu.groupName=g.name AND gu.userID=%s WHERE g.name=%s""", (userID, groupName)) > 0:
+    if cursor.execute("""SELECT g.readPrivate, g.writePrivate, gu.accepted, gu.writable, c.courseID FROM Groups g LEFT JOIN GroupsToUsers gu ON gu.groupName=g.name AND gu.userID=%s LEFT JOIN Classes c ON c.id=g.name WHERE g.name=%s""", (userID, groupName)) > 0:
         row = cursor.fetchone()
         readPrivate = row[0]
         writePrivate = row[1]
         groupAccepted = row[2]
         groupWritable = row[3]
-        if (True):
+        courseID = row[4]
+        if (not readPrivate or groupAccepted is not None):
             events = getEvents(connection, cursor, groupName)
             group = {
                 "name": groupName,
@@ -183,7 +184,8 @@ def getGroup(connection, cursor, groupName, userID):
                 "writePrivate": writePrivate,
                 "users": [],
                 "chats": [],
-                "events": events
+                "events": events,
+                "courseID": courseID
             }
             cursor.execute("""SELECT gu.userID, gu.accepted, gu.writable FROM GroupsToUsers gu WHERE gu.groupName=%s""", (groupName))
             userQueryRes = cursor.fetchall()
@@ -228,15 +230,15 @@ def searchGroups(connection, cursor, query, userID):
                 resp.append({"name": name, "readPrivate": readPrivate, "writePrivate": writePrivate})
     return resp
     
-def createClass(connection, cursor, courseID, schoolName, term, year, courseName, teacherName, timeStr, userID):
+def createClass(connection, cursor, courseID, schoolName, term, year, courseName, teacherName, timeStr, writePrivate, userID):
     if (cursor.execute("""SELECT name FROM Courses WHERE id=%s AND schoolName=%s""", (courseID, schoolName))) == 0:
         cursor.execute("""INSERT INTO Courses VALUES (%s, %s, %s)""", (courseID, courseName, schoolName))
     cursor.execute("""INSERT INTO Teachers VALUES (%s, %s) ON DUPLICATE KEY UPDATE schoolName=%s""", (teacherName, schoolName, schoolName))
     classID = uuid.uuid4()
-    createGroup(connection, cursor, str(classID), False, False, userID)
+    createGroup(connection, cursor, str(classID), False, writePrivate, userID)
     if cursor.execute("""INSERT INTO Classes VALUES (%s, %s, %s, %s, %s, %s)""", (str(classID), teacherName, term, str(year), timeStr, courseID)) > 0:
         connection.commit()
-        return getClass(connection, cursor, str(classID))
+        return getClass(connection, cursor, str(classID), userID)
         
 def getEvents(connection, cursor, groupName):
     cursor.execute("""SELECT e.id, e.name, e.time, e.mins, e.priority, co.id FROM Events e LEFT JOIN Classes c ON c.id=e.groupName LEFT JOIN Courses co ON c.courseID=co.id WHERE e.groupName=%s""", (groupName))
@@ -254,21 +256,38 @@ def getUserEvents(connection, cursor, userID):
     return events
 
 def updateEvents(connection, cursor, groupName, events):
+    idMap = {}
     for event in events:
-        print("EVENT: ", event)
-        if "id" in event:
+        eventID = None
+        if "id" in event and event["id"] is not None:
+            eventID = event["id"]
             cursor.execute("UPDATE Events SET name=%s, time=%s, mins=%s, priority=%s WHERE id=%s", (event["name"], event["time"], event["mins"], str(event["priority"]), event["id"]))
         else:
             eventID = str(uuid.uuid4())
             cursor.execute("INSERT INTO Events VALUES (%s, %s, %s, %s, %s, %s)", (eventID, event["name"], event["time"], event["mins"], groupName, str(event["priority"])))
+        idMap[eventID] = True
     connection.commit()
-    return { "groupName": groupName, "events": getEvents(connection, cursor, groupName) }
+    
+    evts = getEvents(connection, cursor, groupName)
+    results = []
+    for evt in evts:
+        if (evt["id"] in idMap):
+            results.append(evt)
+    return { "groupName": groupName, "events": results }
     
 def deleteEvents(connection, cursor, groupName, eventIDs):
+    idMap = {}
+    for id in eventIDs:
+        idMap[id] = True
+    evts = getEvents(connection, cursor, groupName)
+    results = []
+    for evt in evts:
+        if (evt["id"] in idMap):
+            results.append(evt)
     formatStrings = ','.join(['%s'] * len(eventIDs))
     if cursor.execute("DELETE FROM Events WHERE id IN (%s)" % formatStrings, tuple(eventIDs)) > 0:
         connection.commit()
-        return { "groupName": groupName, "events": getEvents(connection, cursor, groupName) }
+        return { "groupName": groupName, "events": results }
     return { "errMsg": "Failed to delete ids" }
     
 def searchTeachers(connection, cursor, query, userID):
@@ -331,7 +350,7 @@ def searchCourses(connection, cursor, query, userID):
     return courses
     
     
-def getClass(connection, cursor, classID):
+def getClass(connection, cursor, classID, userID):
     if cursor.execute("""SELECT c.teacherName, c.term, c.year, c.timeStr, co.id, co.name, s.name, s.city, s.state, s.pic_key FROM Classes c 
         INNER JOIN Courses co ON c.courseID=co.id
         LEFT JOIN user_data_school s ON co.schoolName=s.name
@@ -353,15 +372,16 @@ def getClass(connection, cursor, classID):
             teacher = {
                 "name": teacherName
             }
-            print("CID: ", classID)
-            return {
+            res = {
                 "id": classID,
                 "course": course,
                 "teacher": teacher,
                 "term": term,
                 "year": year,
-                "timeStr": timeStr
+                "timeStr": timeStr,
+                "group": getGroup(connection, cursor, classID, userID)
             }
+            return res
     return None
     
 def getTerm(connection, cursor, schoolName, year, term):
@@ -369,21 +389,26 @@ def getTerm(connection, cursor, schoolName, year, term):
     for (start, end) in cursor:
         return { "start": start, "end": end }
     
-def getClassesForUser(connection, cursor, userID):
-    cursor.execute("""SELECT gu.groupName FROM GroupsToUsers gu INNER JOIN Classes c ON gu.groupName=c.id WHERE gu.userID=%s""", (userID))
+def getClassesForUser(connection, cursor, queryUserID, userID):
+    cursor.execute("""SELECT gu.groupName FROM GroupsToUsers gu INNER JOIN Classes c ON gu.groupName=c.id WHERE gu.userID=%s""", (queryUserID))
     groupNames = cursor.fetchall()
     classes = []
     for (groupName) in groupNames:
-        classes.append(getClass(connection, cursor, groupName[0]))
+        classes.append(getClass(connection, cursor, groupName[0], userID))
     return classes
     
-def getClassesForCourse(connection, cursor, courseID):
+def getClassesForCourse(connection, cursor, courseID, userID):
     cursor.execute("""SELECT c.id FROM Classes c WHERE c.courseID=%s""", (courseID))
     classIDs = cursor.fetchall()
     classes = []
     for classID in classIDs:
-        classes.append(getClass(connection, cursor, classID[0]))
+        classes.append(getClass(connection, cursor, classID[0], userID))
     return classes
+    
+def updatePersonalEvents(connection, cursor, userID, events):
+    if cursor.execute("""SELECT g.name FROM Groups g WHERE name=%s""", (userID)) == 0:
+        createGroup(connection, cursor, True, True, userID)
+    return updateEvents(connection, cursor, userID, events)
     
 def handler(event, context):
     dbHost = os.environ['db_host']
@@ -427,19 +452,25 @@ def handler(event, context):
     elif (event["type"] == "SetWritable"):
         return setGroupAccess(connection, cursor, args["groupName"], args["setUserID"], args["writable"], userID)
     elif (event["type"] == "CreateClass"):
-        return createClass(connection, cursor, args["courseID"], args["schoolName"], args["term"], args["year"], args["courseName"], args["teacherName"], args["timeStr"], userID)
+        return createClass(connection, cursor, args["courseID"], args["schoolName"], args["term"], args["year"], args["courseName"], args["teacherName"], args["timeStr"], args["writePrivate"], userID)
     elif (event["type"] == "UpdateEvents"):
-        return updateEvents(connection, cursor, args["groupName"], args["events"])
+        if ("personal" in args and args["personal"]):
+            return updatePersonalEvents(connection, cursor, userID, args["events"])
+        else:
+            return updateEvents(connection, cursor, args["groupName"], args["events"])
     elif (event["type"] == "DeleteEvents"):
-        return deleteEvents(connection, cursor, args["groupName"], args["eventIDs"])
+        if ("personal" in args and args["personal"]):
+            return deleteEvents(connection, cursor, userID, args["eventIDs"])
+        else:
+            return deleteEvents(connection, cursor, args["groupName"], args["eventIDs"])
     elif (event["type"] == "SearchCourses"):
         return searchCourses(connection, cursor, args["query"], userID)
     elif (event["type"] == "GetClasses"):
-        return getClassesForCourse(connection, cursor, args["courseID"])
+        return getClassesForCourse(connection, cursor, args["courseID"], userID)
     elif (event["type"] == "GetClass"):
-        return getClass(connection, cursor, args["classID"])
+        return getClass(connection, cursor, args["classID"], userID)
     elif (event["type"] == "GetUserClasses"):
-        return getClassesForUser(connection, cursor, args["userID"])
+        return getClassesForUser(connection, cursor, args["userID"], userID)
     elif (event["type"] == "GetUserEvents"):
         return getUserEvents(connection, cursor, args["userID"])
     elif (event["type"] == "SearchTeachers"):
